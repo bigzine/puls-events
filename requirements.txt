@@ -1,0 +1,24 @@
+# --- Coeur RAG ---
+langchain==0.2.16
+langchain-community==0.2.16
+langchain-mistralai==0.1.13
+mistralai==1.0.3
+faiss-cpu>=1.9.0
+sentence-transformers>=3.0.1
+
+# --- API ---
+fastapi>=0.112.2
+uvicorn[standard]>=0.30.6
+pydantic>=2.8.2
+
+# --- Données / utilitaires ---
+requests>=2.32.3
+python-dotenv>=1.0.1
+pandas>=2.2.2
+tenacity>=8.5.0
+
+# --- Tests & évaluation ---
+pytest>=8.3.2
+pytest-mock>=3.14.0
+scikit-learn>=1.5.1
+numpy>=1.26.4,<2.3
