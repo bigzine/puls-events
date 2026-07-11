@@ -1,1 +1,57 @@
 /.idea
+    # --- Environnements virtuels ---
+.venv/
+.venv_new/
+.venv_test/
+venv/
+env/
+
+# --- Variables d'environnement / secrets ---
+.env
+.env.local
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# --- Tests / couverture ---
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Données (volumineuses / régénérables via les scripts) ---
+data/raw/
+data/processed/
+*.faiss
+*.pkl
+*.index
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+
+# --- macOS ---
+.DS_Store
+
+# --- Docker ---
+*.log
+
+# --- Sorties générées ---
+docs/*.pdf
+outputs/
