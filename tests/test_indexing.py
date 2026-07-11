@@ -8,9 +8,9 @@ Ces tests utilisent DeterministicFakeEmbedding (LangChain) : un embedding
 factice qui génère un vecteur reproductible à partir du hash du texte.
 Aucun appel réseau, aucune clé API requise. Cela permet de valider la
 MÉCANIQUE du pipeline (chunking, indexation, métadonnées, sauvegarde/
-rechargement) indépendamment de la qualité sémantique réelle des vecteurs,
-qui elle est évaluée à l'étape 5 (jeu de test annoté) avec les vrais
-embeddings Mistral/HuggingFace.
+rechargement, robustesse face aux erreurs) indépendamment de la qualité
+sémantique réelle des vecteurs, qui elle est évaluée à l'étape 5 avec le
+jeu de test annoté et le vrai modèle Mistral.
 """
 
 import sys
@@ -131,10 +131,6 @@ class TestBuildFaissIndex:
         assert vs_single_batch.index.ntotal == vs_multi_batch.index.ntotal == len(docs)
 
     def test_exact_text_query_retrieves_matching_document(self, fake_embeddings):
-        """Avec un embedding déterministe, interroger EXACTEMENT le texte
-        d'un chunk doit le renvoyer en tout premier résultat (distance ~0),
-        ce qui valide que l'indexation et la correspondance métadonnées
-        fonctionnent correctement de bout en bout."""
         events = [
             make_event(uid=1, title="Concert de jazz", description_full="Un concert de jazz au Sunset."),
             make_event(uid=2, title="Exposition photo", description_full="Une exposition de photographie."),
@@ -173,3 +169,72 @@ class TestBuildFaissIndex:
 
         results = reloaded.similarity_search(docs[0].page_content, k=1)
         assert results[0].metadata["uid"] == 1
+
+
+class TestBuildFaissIndexResilience:
+    """Tests de robustesse : reprise après interruption et retry sur erreur transitoire."""
+
+    def test_incremental_save_creates_index_after_each_batch(self, fake_embeddings, tmp_path):
+        events = [make_event(uid=i, title=f"Événement {i}") for i in range(6)]
+        docs = chunk_events(events)
+        save_dir = tmp_path / "faiss_index"
+
+        build_faiss_index(docs, fake_embeddings, batch_size=2, save_dir=str(save_dir))
+
+        assert save_dir.exists()
+        assert not (tmp_path / "build_state.json").exists()
+
+    def test_resume_skips_already_processed_chunks(self, fake_embeddings, tmp_path, mocker):
+        events = [make_event(uid=i, title=f"Événement {i}") for i in range(6)]
+        docs = chunk_events(events)
+        save_dir = tmp_path / "faiss_index"
+
+        spy = mocker.spy(FAISS, "from_documents")
+
+        build_faiss_index(docs[:4], fake_embeddings, batch_size=2, save_dir=str(save_dir))
+        assert spy.call_count == 2
+
+        spy.reset_mock()
+        result = build_faiss_index(docs, fake_embeddings, batch_size=2, save_dir=str(save_dir))
+        assert result.index.ntotal == 6
+
+    def test_resume_with_matching_total_skips_processed_batches(self, fake_embeddings, tmp_path, mocker):
+        events = [make_event(uid=i, title=f"Événement {i}") for i in range(4)]
+        docs = chunk_events(events)
+        save_dir = tmp_path / "faiss_index"
+
+        build_faiss_index(docs, fake_embeddings, batch_size=2, save_dir=str(save_dir))
+
+        spy = mocker.spy(FAISS, "from_documents")
+        build_faiss_index(docs, fake_embeddings, batch_size=2, save_dir=str(save_dir))
+        assert spy.call_count == 2
+
+    def test_transient_error_is_retried_and_recovers(self, fake_embeddings, mocker):
+        events = [make_event(uid=i, title=f"Événement {i}") for i in range(2)]
+        docs = chunk_events(events)
+
+        call_count = {"n": 0}
+        original_from_documents = FAISS.from_documents
+
+        def flaky_from_documents(*args, **kwargs):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("Erreur transitoire simulée (ex. 429)")
+            return original_from_documents(*args, **kwargs)
+
+        mocker.patch.object(FAISS, "from_documents", side_effect=flaky_from_documents)
+        mocker.patch("build_index.time.sleep")
+
+        vectorstore = build_faiss_index(docs, fake_embeddings, batch_size=64, max_retries=3)
+        assert vectorstore.index.ntotal == 2
+        assert call_count["n"] == 2
+
+    def test_permanent_error_raises_after_max_retries(self, fake_embeddings, mocker):
+        events = [make_event(uid=1, title="Événement")]
+        docs = chunk_events(events)
+
+        mocker.patch.object(FAISS, "from_documents", side_effect=RuntimeError("Erreur persistante"))
+        mocker.patch("build_index.time.sleep")
+
+        with pytest.raises(RuntimeError, match="Échec définitif"):
+            build_faiss_index(docs, fake_embeddings, batch_size=64, max_retries=2)
