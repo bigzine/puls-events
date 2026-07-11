@@ -1,5 +1,4 @@
-/.idea
-    # --- Environnements virtuels ---
+ # --- Environnements virtuels ---
 .venv/
 .venv_new/
 .venv_test/
