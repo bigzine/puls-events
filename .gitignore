@@ -54,3 +54,4 @@ data/processed/
 # --- Sorties générées ---
 docs/*.pdf
 outputs/
+data/index/index_metadata.json

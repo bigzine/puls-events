@@ -104,22 +104,64 @@ def build_faiss_index(
     documents: list[Document],
     embeddings: Embeddings,
     batch_size: int = EMBEDDING_BATCH_SIZE,
+    save_dir: str | None = None,
+    resume: bool = True,
+    pace_seconds: float = 0.0,
+    max_retries: int = 4,
 ) -> FAISS:
-    """Construit l'index FAISS par lots (batches), puis fusionne les lots.
+    """Construit l'index FAISS par lots (batches), avec robustesse face aux
+    aléas de l'API d'embeddings (erreurs réseau, limites de débit) :
 
-    Le traitement par lots évite d'envoyer des milliers de textes en un seul
-    appel API (risque de dépassement de limite de requête / timeout), et
-    permet de suivre la progression sur un grand volume d'événements.
+    - Chaque lot est retenté (backoff exponentiel) en cas d'échec, plutôt que
+      de faire planter tout le pipeline sur une erreur transitoire.
+    - Si `save_dir` est fourni, l'index est sauvegardé sur disque après CHAQUE
+      lot traité, avec un fichier d'état (`build_state.json`). Si le script
+      plante ou est interrompu, il reprend automatiquement là où il s'était
+      arrêté au lieu de tout revectoriser depuis le début.
+    - `pace_seconds` insère un délai entre les lots pour respecter les
+      limites de débit de l'API (ex. 1 requête/seconde pour mistral-embed).
     """
     if not documents:
         raise ValueError("Aucun document à indexer.")
 
-    vectorstore: FAISS | None = None
     total = len(documents)
+    start_index = 0
+    vectorstore: FAISS | None = None
+    state_path = Path(save_dir).parent / "build_state.json" if save_dir else None
 
-    for start in range(0, total, batch_size):
+    if resume and save_dir and state_path and state_path.exists() and Path(save_dir).exists():
+        with open(state_path, encoding="utf-8") as f:
+            state = json.load(f)
+        if state.get("total_documents") == total:
+            start_index = state.get("processed", 0)
+            vectorstore = FAISS.load_local(save_dir, embeddings, allow_dangerous_deserialization=True)
+            print(f"  Reprise détectée : {start_index}/{total} chunks déjà indexés, poursuite...")
+        else:
+            print("  Un état de reprise existe mais ne correspond pas au jeu de données actuel : reconstruction complète.")
+
+    for start in range(start_index, total, batch_size):
         batch = documents[start:start + batch_size]
-        batch_store = FAISS.from_documents(batch, embeddings)
+
+        last_error: Exception | None = None
+        batch_store: FAISS | None = None
+        for attempt in range(max_retries):
+            try:
+                batch_store = FAISS.from_documents(batch, embeddings)
+                break
+            except Exception as exc:  # l'API d'embeddings peut lever des erreurs peu explicites
+                last_error = exc
+                wait = 2 ** attempt
+                print(f"  [AVERTISSEMENT] Échec du lot {start}-{start + len(batch)} "
+                      f"(tentative {attempt + 1}/{max_retries}) : {exc}. Nouvelle tentative dans {wait}s...")
+                time.sleep(wait)
+
+        if batch_store is None:
+            raise RuntimeError(
+                f"Échec définitif sur le lot {start}-{start + len(batch)} après {max_retries} tentatives. "
+                f"Dernière erreur : {last_error}\n"
+                f"Le travail effectué jusqu'ici est sauvegardé dans {save_dir} : "
+                f"relancez le script pour reprendre à partir du lot {start}."
+            )
 
         if vectorstore is None:
             vectorstore = batch_store
@@ -128,6 +170,18 @@ def build_faiss_index(
 
         done = min(start + batch_size, total)
         print(f"  Indexation : {done}/{total} chunks vectorisés")
+
+        if save_dir:
+            vectorstore.save_local(save_dir)
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump({"processed": done, "total_documents": total}, f)
+
+        if pace_seconds > 0:
+            time.sleep(pace_seconds)
+
+    # Indexation terminée avec succès : le fichier d'état n'est plus nécessaire.
+    if state_path and state_path.exists():
+        state_path.unlink()
 
     return vectorstore
 
@@ -150,11 +204,22 @@ def main() -> None:
     provider = os.getenv("EMBEDDING_PROVIDER", "mistral")
     print(f"Fournisseur d'embeddings : {provider}")
 
-    start_time = time.time()
-    vectorstore = build_faiss_index(documents, embeddings)
-    elapsed = time.time() - start_time
+    # mistral-embed est limité à 1 requête/seconde sur le palier gratuit :
+    # on ajoute une marge de sécurité au-delà de la limite stricte.
+    pace_seconds = 1.1 if provider == "mistral" else 0.0
 
     INDEX_DIR.parent.mkdir(parents=True, exist_ok=True)
+
+    start_time = time.time()
+    vectorstore = build_faiss_index(
+        documents,
+        embeddings,
+        save_dir=str(INDEX_DIR),
+        resume=True,
+        pace_seconds=pace_seconds,
+    )
+    elapsed = time.time() - start_time
+
     vectorstore.save_local(str(INDEX_DIR))
 
     metadata = {
