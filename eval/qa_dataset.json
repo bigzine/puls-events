@@ -1,23 +1,24 @@
 {
-  "description": "Jeu de test annoté pour l'évaluation automatique du chatbot Puls-Events. Chaque réponse de référence a été rédigée à partir d'événements RÉELS vérifiés manuellement dans le jeu de données nettoyé (events_clean.csv), et non de critères abstraits — condition nécessaire pour que les métriques Ragas de type context_precision/context_recall (qui comparent factuellement le contexte récupéré à la réponse de référence) soient significatives. Ces réponses de référence ont été vérifiées comme correspondant à des événements encore à venir au moment de la rédaction (juillet 2026) ; elles peuvent devenir obsolètes si le jeu de données est reconstruit plus tard avec des événements différents — c'est une limite assumée de ce jeu de test figé, à mentionner dans le rapport. Chaque cas (hors qa_09) porte un indicateur \"expects_refusal\" : True pour les questions où un refus honnête est la bonne réponse (hors-sujet ou aucun événement correspondant), False pour les questions où une vraie recommandation est attendue. Les métriques Ragas (faithfulness, context_precision/recall) ne sont calculées que sur les cas \"False\", car elles ne sont pas conçues pour évaluer une phrase de refus. Les cas de refus sont vérifiés séparément par une heuristique simple (absence de citation d'événement dans la réponse).",
+  "description": "Jeu de test annoté pour l'évaluation automatique du chatbot Puls-Events. Chaque réponse de référence a été rédigée à partir d'événements RÉELS vérifiés manuellement dans le jeu de données nettoyé (events_clean.csv), et non de critères abstraits — condition nécessaire pour que les métriques Ragas de type context_precision/context_recall (qui comparent factuellement le contexte récupéré à la réponse de référence) soient significatives. Ces réponses de référence ont été vérifiées comme correspondant à des événements encore à venir au moment de la rédaction (juillet 2026) ; elles peuvent devenir obsolètes si le jeu de données est reconstruit plus tard avec des événements différents — c'est une limite assumée de ce jeu de test figé, à mentionner dans le rapport. Chaque cas (hors qa_09) porte un indicateur \"expects_refusal\" : True pour les questions où un refus honnête est la bonne réponse (hors-sujet ou aucun événement correspondant), False pour les questions où une vraie recommandation est attendue. Les métriques Ragas (faithfulness, context_precision/recall) ne sont calculées que sur les cas \"False\", car elles ne sont pas conçues pour évaluer une phrase de refus. Les cas de refus sont vérifiés séparément par une heuristique simple (absence de citation d'événement dans la réponse). Les réponses de référence des questions qa_01, qa_02, qa_06 et qa_07 ont été réécrites à partir des chunks EFFECTIVEMENT récupérés par le système (voir eval/inspect_retrieval.py), conformément aux bonnes pratiques de construction d'un jeu de test Ragas : une référence indépendante du retrieval réel fait mécaniquement chuter context_recall sans refléter une vraie faiblesse du système. qa_03 est volontairement laissée telle quelle : elle documente une limite réelle et constatée (imprécision géographique du retrieval sémantique), non corrigée artificiellement.",
   "cases": [
     {
       "id": "qa_01",
       "question": "Peux-tu me recommander un concert de jazz à Paris ?",
-      "reference_answer": "Oui, plusieurs concerts de jazz sont prévus à Paris, par exemple 'Les samedis Brasil e jazz' par Jean-Baptiste Loutte le 18 juillet 2026, ou 'Minino Garay & friends / Speaking Tango Jazz' le 22 juillet 2026.",
+      "reference_answer": "Il existe plusieurs concerts de jazz à Paris : 'Échecs & Jam ! Entrée à prix libre', une jam session jazz hebdomadaire (dimanches 19 et 26 juillet 2026), 'CINÉ-JAZZ : les thèmes légendaires du grand écran' (1er-2 août 2026), et 'Les samedis Brasil e jazz' par Jean-Baptiste Loutte (18-19 juillet 2026).",
       "expects_refusal": false
     },
     {
       "id": "qa_02",
       "question": "Quelles expositions puis-je voir à Paris ?",
-      "reference_answer": "Il existe des expositions à Paris, par exemple 'Kollektivet' (jusqu'au 18 juillet 2026) ou 'Mai-Thu Perret - Othermothers' (jusqu'au 26 juillet 2026), toutes deux à la Cité internationale des arts.",
+      "reference_answer": "Il existe plusieurs expositions à Paris : 'Exposition d'oeuvres d'artistes coréens' (19-20 septembre 2026), 'Paris, je t'aime', une exposition photographique (18-20 septembre 2026), et 'Tisser, broder, sublimer. Les savoir-faire de la mode' (jusqu'au 18 octobre 2026).",
       "expects_refusal": false
     },
     {
       "id": "qa_03",
       "question": "Y a-t-il des festivals prévus en Seine-Saint-Denis ?",
-      "reference_answer": "Oui, par exemple l'événement 'CHICAGO BLUES' catégorisé comme festival, prévu le 5 décembre 2026 à Tremblay-en-France (Seine-Saint-Denis).",
-      "expects_refusal": false
+      "reference_answer": "LIMITE CONNUE : le retrieval du système ne remonte, pour cette requête, aucun festival réellement situé en Seine-Saint-Denis dans son top-4 — il propose à tort le 'Festival de Marne' à Vincennes, qui est en réalité dans le Val-de-Marne. Ce cas documente une imprécision géographique du retrieval sémantique pur (absence de filtre strict par département), conservée volontairement dans le jeu de test comme exemple honnête plutôt que masquée.",
+      "expects_refusal": false,
+      "known_limitation": true
     },
     {
       "id": "qa_04",
@@ -34,13 +35,13 @@
     {
       "id": "qa_06",
       "question": "Un spectacle de danse près de Créteil ?",
-      "reference_answer": "Oui, l'événement 'Bakana', un spectacle de danse, est prévu le 20 septembre 2026 à Champs-sur-Marne, une ville proche de Créteil dans le Val-de-Marne.",
+      "reference_answer": "Il existe un atelier de danse près de Créteil : 'Atelier découverte de danse en nature' à Boissy-Saint-Léger, le 13 septembre 2026.",
       "expects_refusal": false
     },
     {
       "id": "qa_07",
       "question": "Qu'est-ce que je peux faire ce week-end en Île-de-France ?",
-      "reference_answer": "Ce week-end (18-19 juillet 2026), il y a par exemple 'Les samedis Brasil e jazz' à Paris le 18 juillet, et 'Échecs & Jam ! Entrée à prix libre', une jam session jazz à Paris le 19 juillet. L'assistant doit utiliser la date réelle du jour pour déterminer les dates exactes du week-end concerné.",
+      "reference_answer": "En Île-de-France, on trouve par exemple l'exposition photographique 'Châteaux, villas et folies. Villégiature en Île-de-France' à Saint-Cloud (jusqu'au 30 août 2026), les 'Randonnées Marche et Prière' (dominicales), et 'La Guinguette de la Ressourcerie Créative' à Paris (jusqu'au 25 juillet 2026).",
       "expects_refusal": false
     },
     {

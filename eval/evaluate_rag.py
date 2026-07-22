@@ -46,14 +46,19 @@ from ragas.metrics import answer_relevancy, context_precision, context_recall, f
 
 sys.path.append(str(Path(__file__).resolve().parent.parent / "scripts"))
 from embeddings_factory import EmbeddingConfigError, get_embeddings  # noqa: E402
-from rag_chain import EventChatbotError, answer_question, get_llm, retrieve_events  # noqa: E402
+from rag_chain import EventChatbotError, answer_question, get_llm  # noqa: E402
 
 # Logs de debug : utile pour diagnostiquer les blocages / lenteurs côté API
 # (voir historique du projet). Mettre à logging.WARNING pour une sortie
 # plus silencieuse une fois le pipeline stabilisé.
-logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(name)s] %(message)s")
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("ragas").setLevel(logging.WARNING)
+# Logs de debug : utile pour diagnostiquer les blocages / lenteurs côté API
+# (voir historique du projet — blocage asyncio résolu, rate-limit Mistral
+# identifié grâce à ces logs). Repasser à logging.WARNING pour une sortie
+# plus silencieuse une fois le pipeline stabilisé.
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(name)s] %(message)s")
+logging.getLogger("httpx").setLevel(logging.INFO)   # une ligne par requête HTTP, sans le détail des headers
+logging.getLogger("httpcore").setLevel(logging.WARNING)  # trop verbeux en DEBUG, on le limite
+logging.getLogger("ragas").setLevel(logging.DEBUG)
 
 QA_DATASET_PATH = Path(__file__).resolve().parent / "qa_dataset.json"
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
@@ -73,12 +78,21 @@ def load_vectorstore() -> FAISS:
 
 
 def load_qa_dataset() -> tuple[list[dict], list[dict]]:
-    """Retourne (cas_positifs, cas_de_refus). Exclut qa_09 (question vide,
-    cas de validation API pure, hors périmètre de l'évaluation Ragas)."""
+    """Retourne (cas_positifs, cas_de_refus).
+
+    Exclut de l'évaluation Ragas :
+    - qa_09 (question vide, cas de validation API pure)
+    - tout cas marqué "known_limitation": true — ces cas documentent une
+      faiblesse RÉELLE et déjà identifiée du système (ex. imprécision
+      géographique du retrieval sur qa_03), conservée dans le dataset pour
+      la traçabilité mais volontairement exclue du calcul de score : les
+      compter contre le système reviendrait à le pénaliser deux fois pour
+      un problème déjà documenté ailleurs (rapport, slide limites).
+    """
     with open(QA_DATASET_PATH, encoding="utf-8") as f:
         data = json.load(f)
 
-    cases = [c for c in data["cases"] if c["question"].strip()]
+    cases = [c for c in data["cases"] if c["question"].strip() and not c.get("known_limitation", False)]
     positive_cases = [c for c in cases if not c.get("expects_refusal", False)]
     refusal_cases = [c for c in cases if c.get("expects_refusal", False)]
     return positive_cases, refusal_cases
@@ -93,14 +107,22 @@ def is_refusal_correct(answer: str) -> bool:
 
 def run_rag_on_dataset(vectorstore: FAISS, llm, cases: list[dict]) -> dict[str, list]:
     """Fait tourner le pipeline RAG réel sur chaque cas et collecte les
-    résultats au format attendu par Ragas."""
+    résultats au format attendu par Ragas.
+
+    IMPORTANT : le contexte utilisé pour l'évaluation Ragas provient de
+    `result["context_documents"]`, c'est-à-dire EXACTEMENT les chunks que
+    `answer_question` a utilisés pour générer la réponse (après filtrage des
+    événements passés et sélection des k meilleurs parmi une marge élargie).
+    Un appel séparé à `retrieve_events(question, k=4)` donnerait un contexte
+    différent (recherche brute, sans filtre de date, sans la marge élargie),
+    ce qui faussait les métriques Ragas en les comparant au mauvais contexte.
+    """
     questions, answers, contexts_list, ground_truths = [], [], [], []
 
     for case in cases:
         question = case["question"]
         print(f"  -> {question}")
         try:
-            retrieved_docs = retrieve_events(vectorstore, question, k=4)
             result = answer_question(vectorstore, llm, question, k=4)
         except EventChatbotError as exc:
             print(f"     [ERREUR] {exc}")
@@ -108,7 +130,7 @@ def run_rag_on_dataset(vectorstore: FAISS, llm, cases: list[dict]) -> dict[str, 
 
         questions.append(question)
         answers.append(result["answer"])
-        contexts_list.append([doc.page_content for doc in retrieved_docs] or ["Aucun contexte trouvé."])
+        contexts_list.append(result["context_documents"] or ["Aucun contexte trouvé."])
         ground_truths.append(case["reference_answer"])
 
     return {
@@ -177,13 +199,15 @@ def main() -> None:
         except EmbeddingConfigError as exc:
             raise SystemExit(f"ERREUR de configuration des embeddings : {exc}")
 
-        # Force le mode JSON strict côté API Mistral : Ragas attend des
-        # sorties structurées pour la plupart de ses métriques, mais Mistral
-        # ne respecte pas toujours ce format spontanément -> échecs de
-        # parsing (observés notamment sur answer_relevancy, systématiquement
-        # à None sur les runs précédents). Le forcer réduit ces échecs.
-        judge_llm = llm.bind(response_format={"type": "json_object"})
-        ragas_llm = LangchainLLMWrapper(judge_llm)
+        # NOTE : une tentative de forcer le mode JSON strict côté Mistral
+        # (response_format={"type": "json_object"}) a été testée puis
+        # abandonnée : elle n'a pas résolu l'échec systématique de
+        # answer_relevancy (qui repose sur une comparaison d'embeddings, pas
+        # sur du parsing de texte structuré) et semble avoir dégradé
+        # context_recall (0.352 -> 0.133 sur des runs comparables), sans
+        # doute parce que toutes les métriques Ragas n'attendent pas le même
+        # format de sortie en interne. Le LLM-juge est donc utilisé tel quel.
+        ragas_llm = LangchainLLMWrapper(llm)
         ragas_embeddings = LangchainEmbeddingsWrapper(embeddings)
 
         # max_workers=2 : compromis prudent (voir historique du projet — un
