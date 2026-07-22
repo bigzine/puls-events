@@ -26,3 +26,4 @@ pytest-mock>=3.14.0
 scikit-learn>=1.5.1
 numpy>=1.26.4,<2.3
 ragas==0.1.21
+nest_asyncio>=1.6.0

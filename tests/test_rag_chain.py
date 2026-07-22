@@ -14,8 +14,10 @@ jeu de test annoté et le vrai modèle Mistral.
 """
 
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 import pytest
 from langchain_community.embeddings import DeterministicFakeEmbedding
@@ -35,9 +37,31 @@ from rag_chain import (  # noqa: E402
     format_context,
     parse_event_datetime,
     retrieve_events,
+    this_weekend_str,
 )
 
 EMBEDDING_DIM = 64
+
+
+class _FrozenDateTime(datetime):
+    """Sous-classe de datetime dont .now() renvoie une date figée, pour
+    tester le calcul du week-end sans dépendre de la date réelle
+    d'exécution des tests. Hérite de datetime, donc fromisoformat() et le
+    reste de l'API restent intacts pour les autres fonctions du module."""
+    _frozen_now: datetime
+
+    @classmethod
+    def now(cls, tz=None):
+        if tz is not None:
+            return cls._frozen_now.replace(tzinfo=tz)
+        return cls._frozen_now
+
+
+@contextmanager
+def freeze_time_weekday(dt: datetime):
+    _FrozenDateTime._frozen_now = dt
+    with mock.patch("rag_chain.datetime", _FrozenDateTime):
+        yield
 
 
 def iso_in_days(days: int) -> str:
@@ -389,3 +413,80 @@ class TestFetchKMargin:
             "Aucun des événements futurs n'a été trouvé malgré une marge de "
             "récupération censée compenser la majorité d'événements passés."
         )
+
+
+class TestWeekendCalculation:
+    """Reproduit le bug constaté en conditions réelles : le LLM a annoncé
+    'ce week-end (20 et 21 juillet 2026)' un samedi 18 juillet — alors que
+    le 20 et le 21 juillet 2026 tombent un lundi et un mardi. Les dates du
+    week-end sont désormais calculées en Python, pas confiées au LLM."""
+
+    def test_saturday_returns_today_and_tomorrow(self):
+        with freeze_time_weekday(datetime(2026, 7, 18)):  # samedi
+            assert this_weekend_str() == "samedi 18 juillet 2026 et dimanche 19 juillet 2026"
+
+    def test_sunday_returns_yesterday_and_today(self):
+        with freeze_time_weekday(datetime(2026, 7, 19)):  # dimanche
+            assert this_weekend_str() == "samedi 18 juillet 2026 et dimanche 19 juillet 2026"
+
+    def test_weekday_returns_upcoming_weekend(self):
+        with freeze_time_weekday(datetime(2026, 7, 16)):  # jeudi
+            assert this_weekend_str() == "samedi 18 juillet 2026 et dimanche 19 juillet 2026"
+
+    def test_monday_returns_next_weekend_not_the_one_just_passed(self):
+        with freeze_time_weekday(datetime(2026, 7, 20)):  # lundi
+            assert this_weekend_str() == "samedi 25 juillet 2026 et dimanche 26 juillet 2026"
+
+    def test_weekend_dates_are_injected_in_system_prompt(self):
+        with freeze_time_weekday(datetime(2026, 7, 18)):
+            prompt = build_system_prompt()
+            assert this_weekend_str() in prompt
+
+
+class TestDistanceThresholdFiltering:
+    """Filtre de seuil de distance (inspiré de l'exercice OpenClassrooms
+    "Mettez en place un RAG pour un LLM") : réduit le bruit dans le contexte
+    récupéré en écartant les résultats trop éloignés sémantiquement, même
+    s'ils font partie des k plus proches voisins."""
+
+    def test_no_threshold_preserves_default_behavior(self, small_vectorstore):
+        with_threshold = retrieve_events(small_vectorstore, "concert de jazz", k=3, max_distance=None)
+        without_param = retrieve_events(small_vectorstore, "concert de jazz", k=3)
+        assert len(with_threshold) == len(without_param) == 3
+
+    def test_exact_match_survives_a_strict_threshold(self, small_vectorstore, fake_embeddings):
+        docs = small_vectorstore.similarity_search("concert de jazz au Sunset", k=1)
+        exact_text = docs[0].page_content
+
+        results = retrieve_events(small_vectorstore, exact_text, k=3, max_distance=1e-6)
+        assert len(results) >= 1
+        assert results[0].page_content == exact_text
+
+    def test_very_strict_threshold_can_return_empty(self, small_vectorstore):
+        """Un seuil extrêmement strict peut légitimement ne rien retourner :
+        la fonction doit gérer ce cas sans planter (pas d'IndexError etc)."""
+        results = retrieve_events(small_vectorstore, "une requête sans rapport", k=3, max_distance=-1.0)
+        assert results == []
+
+    def test_answer_question_respects_env_threshold(self, small_vectorstore, monkeypatch, mocker):
+        """Vérifie que MAX_RETRIEVAL_DISTANCE, lu depuis l'environnement,
+        est bien transmis jusqu'à retrieve_events."""
+        monkeypatch.setenv("MAX_RETRIEVAL_DISTANCE", "0.5")
+        spy = mocker.spy(sys.modules["rag_chain"], "retrieve_events")
+
+        llm = FakeListChatModel(responses=["Réponse"])
+        answer_question(small_vectorstore, llm, "concert de jazz", k=2)
+
+        assert spy.call_count == 1
+        _, kwargs = spy.call_args
+        assert kwargs.get("max_distance") == 0.5
+
+    def test_answer_question_defaults_to_no_threshold_when_env_unset(self, small_vectorstore, monkeypatch, mocker):
+        monkeypatch.delenv("MAX_RETRIEVAL_DISTANCE", raising=False)
+        spy = mocker.spy(sys.modules["rag_chain"], "retrieve_events")
+
+        llm = FakeListChatModel(responses=["Réponse"])
+        answer_question(small_vectorstore, llm, "concert de jazz", k=2)
+
+        _, kwargs = spy.call_args
+        assert kwargs.get("max_distance") is None
