@@ -1,0 +1,31 @@
+# Environnements virtuels et caches Python
+.venv/
+.venv_new/
+.venv_test/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Secrets — ne JAMAIS inclure dans l'image
+.env
+.env.local
+
+# Données volumineuses / régénérables — montées en volume au runtime,
+# jamais copiées dans l'image (voir Dockerfile)
+data/
+
+# Git, IDE, docs
+.git/
+.gitignore
+.idea/
+.vscode/
+*.md
+docs/
+
+# Tests (pas nécessaires à l'exécution de l'API en production)
+tests/
+api_test.py
+eval/results/
+
+# CI (non pertinent à l'intérieur de l'image)
+.github/

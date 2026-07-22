@@ -1,0 +1,25 @@
+# Fichier optionnel : simplifie le lancement (une seule commande au lieu
+# d'une ligne `docker run` à rallonge). Voir README pour l'équivalent en
+# commande `docker run` brute.
+#
+# Usage :
+#   docker compose up --build
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # Monte les données déjà nettoyées et l'index déjà construit depuis
+      # l'hôte : le conteneur ne reconstruit rien au démarrage, il consomme
+      # simplement ce qui existe déjà sur la machine hôte.
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
