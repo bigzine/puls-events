@@ -55,3 +55,4 @@ data/processed/
 docs/*.pdf
 outputs/
 data/index/index_metadata.json
+/eval/results
