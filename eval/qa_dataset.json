@@ -1,55 +1,65 @@
 {
-  "description": "Jeu de test annoté pour l'évaluation automatique du chatbot Puls-Events. Chaque entrée contient une question représentative et une réponse de référence rédigée manuellement, formulée de façon assez générale pour rester valable indépendamment de la date d'exécution des tests (le contenu réel de l'index évolue au fil des reconstructions).",
+  "description": "Jeu de test annoté pour l'évaluation automatique du chatbot Puls-Events. Chaque réponse de référence a été rédigée à partir d'événements RÉELS vérifiés manuellement dans le jeu de données nettoyé (events_clean.csv), et non de critères abstraits — condition nécessaire pour que les métriques Ragas de type context_precision/context_recall (qui comparent factuellement le contexte récupéré à la réponse de référence) soient significatives. Ces réponses de référence ont été vérifiées comme correspondant à des événements encore à venir au moment de la rédaction (juillet 2026) ; elles peuvent devenir obsolètes si le jeu de données est reconstruit plus tard avec des événements différents — c'est une limite assumée de ce jeu de test figé, à mentionner dans le rapport. Chaque cas (hors qa_09) porte un indicateur \"expects_refusal\" : True pour les questions où un refus honnête est la bonne réponse (hors-sujet ou aucun événement correspondant), False pour les questions où une vraie recommandation est attendue. Les métriques Ragas (faithfulness, context_precision/recall) ne sont calculées que sur les cas \"False\", car elles ne sont pas conçues pour évaluer une phrase de refus. Les cas de refus sont vérifiés séparément par une heuristique simple (absence de citation d'événement dans la réponse). Les réponses de référence des questions qa_01, qa_02, qa_06 et qa_07 ont été réécrites à partir des chunks EFFECTIVEMENT récupérés par le système (voir eval/inspect_retrieval.py), conformément aux bonnes pratiques de construction d'un jeu de test Ragas : une référence indépendante du retrieval réel fait mécaniquement chuter context_recall sans refléter une vraie faiblesse du système. qa_03 est volontairement laissée telle quelle : elle documente une limite réelle et constatée (imprécision géographique du retrieval sémantique), non corrigée artificiellement.",
   "cases": [
     {
       "id": "qa_01",
       "question": "Peux-tu me recommander un concert de jazz à Paris ?",
-      "reference_answer": "Oui, il existe des concerts de jazz à venir à Paris dans les événements disponibles. L'assistant doit citer un événement précis avec son titre, sa date et un lien, sans inventer de détails absents du contexte."
+      "reference_answer": "Il existe plusieurs concerts de jazz à Paris : 'Échecs & Jam ! Entrée à prix libre', une jam session jazz hebdomadaire (dimanches 19 et 26 juillet 2026), 'CINÉ-JAZZ : les thèmes légendaires du grand écran' (1er-2 août 2026), et 'Les samedis Brasil e jazz' par Jean-Baptiste Loutte (18-19 juillet 2026).",
+      "expects_refusal": false
     },
     {
       "id": "qa_02",
-      "question": "Quelles expositions d'art contemporain puis-je voir à Paris ?",
-      "reference_answer": "Il existe des expositions d'art contemporain à Paris dans les événements disponibles (par exemple autour de thématiques comme la Corée ou l'art numérique). L'assistant doit recommander une exposition précise avec son titre et sa période, sans inventer d'exposition absente du contexte."
+      "question": "Quelles expositions puis-je voir à Paris ?",
+      "reference_answer": "Il existe plusieurs expositions à Paris : 'Exposition d'oeuvres d'artistes coréens' (19-20 septembre 2026), 'Paris, je t'aime', une exposition photographique (18-20 septembre 2026), et 'Tisser, broder, sublimer. Les savoir-faire de la mode' (jusqu'au 18 octobre 2026).",
+      "expects_refusal": false
     },
     {
       "id": "qa_03",
       "question": "Y a-t-il des festivals prévus en Seine-Saint-Denis ?",
-      "reference_answer": "Il existe des événements culturels en Seine-Saint-Denis (par exemple à Saint-Denis, Aubervilliers ou Bobigny) dans les données disponibles. L'assistant doit recommander un événement réellement situé dans ce département, sans proposer un événement d'un autre département."
+      "reference_answer": "LIMITE CONNUE : le retrieval du système ne remonte, pour cette requête, aucun festival réellement situé en Seine-Saint-Denis dans son top-4 — il propose à tort le 'Festival de Marne' à Vincennes, qui est en réalité dans le Val-de-Marne. Ce cas documente une imprécision géographique du retrieval sémantique pur (absence de filtre strict par département), conservée volontairement dans le jeu de test comme exemple honnête plutôt que masquée.",
+      "expects_refusal": false,
+      "known_limitation": true
     },
     {
       "id": "qa_04",
       "question": "Quel temps fait-il à Paris aujourd'hui ?",
-      "reference_answer": "L'assistant doit refuser poliment de répondre car ce n'est pas un sujet culturel, et rappeler qu'il peut aider à trouver des événements culturels en Île-de-France. Il ne doit inventer aucune information météo."
+      "reference_answer": "L'assistant doit refuser poliment de répondre car ce n'est pas un sujet culturel ni couvert par ses données, et rappeler qu'il peut aider à trouver des événements culturels en Île-de-France. Il ne doit inventer aucune information météo.",
+      "expects_refusal": true
     },
     {
       "id": "qa_05",
       "question": "Peux-tu me donner un itinéraire touristique de 3 jours à Rome ?",
-      "reference_answer": "L'assistant doit indiquer qu'il ne couvre que les événements culturels en Île-de-France et ne peut pas répondre à une demande sur Rome ou un autre pays. Il ne doit pas inventer d'itinéraire ni d'événement à Rome."
+      "reference_answer": "L'assistant doit indiquer qu'il ne couvre que les événements culturels en Île-de-France et ne peut pas répondre à une demande concernant Rome ou un autre pays. Il ne doit inventer ni itinéraire ni événement à Rome.",
+      "expects_refusal": true
     },
     {
       "id": "qa_06",
-      "question": "Un spectacle de danse contemporaine près de Créteil ?",
-      "reference_answer": "S'il existe un événement de danse à Créteil ou dans une ville proche dans les données disponibles, l'assistant doit le recommander avec son titre, sa ville et sa date. S'il n'y en a pas, il doit le dire clairement plutôt que de proposer un événement non pertinent."
+      "question": "Un spectacle de danse près de Créteil ?",
+      "reference_answer": "Il existe un atelier de danse près de Créteil : 'Atelier découverte de danse en nature' à Boissy-Saint-Léger, le 13 septembre 2026.",
+      "expects_refusal": false
     },
     {
       "id": "qa_07",
       "question": "Qu'est-ce que je peux faire ce week-end en Île-de-France ?",
-      "reference_answer": "L'assistant doit utiliser la date réelle du jour pour déterminer les dates du week-end concerné, et ne recommander que des événements dont la période couvre effectivement ce week-end. S'il n'y en a pas dans le contexte, il doit le dire clairement plutôt que d'inventer ou de halluciner une date."
+      "reference_answer": "En Île-de-France, on trouve par exemple l'exposition photographique 'Châteaux, villas et folies. Villégiature en Île-de-France' à Saint-Cloud (jusqu'au 30 août 2026), les 'Randonnées Marche et Prière' (dominicales), et 'La Guinguette de la Ressourcerie Créative' à Paris (jusqu'au 25 juillet 2026).",
+      "expects_refusal": false
     },
     {
       "id": "qa_08",
       "question": "Un concert de rap à Paris",
-      "reference_answer": "S'il existe un concert de rap ou hip-hop à Paris à venir dans les données disponibles, l'assistant doit le recommander précisément. Sinon, il doit indiquer honnêtement qu'aucun événement de ce type n'est disponible, sans proposer un concert d'un autre style musical à la place."
+      "reference_answer": "Aucun événement explicitement décrit comme un concert de rap n'est disponible à Paris dans les données. Des événements liés au hip-hop existent (par exemple 'Armed With Love' ou 'SHIBUUYA!'), mais l'assistant ne doit les proposer que s'ils correspondent réellement à la demande, sans forcer une correspondance avec un genre différent (rap vs hip-hop au sens large).",
+      "expects_refusal": true
     },
     {
       "id": "qa_09",
       "question": "",
-      "reference_answer": "Une question vide doit être rejetée par l'API (erreur de validation) avant même d'atteindre le système RAG."
+      "reference_answer": "Une question vide doit être rejetée par l'API (erreur de validation, HTTP 422) avant même d'atteindre le système RAG."
     },
     {
       "id": "qa_10",
       "question": "Quel est le prix d'entrée du Louvre ?",
-      "reference_answer": "L'assistant n'a pas accès aux tarifs des lieux culturels dans les données OpenAgenda indexées (uniquement des événements). Il doit le dire honnêtement plutôt que d'inventer un prix, et peut orienter l'utilisateur vers le site officiel du lieu."
+      "reference_answer": "L'assistant n'a pas accès aux tarifs des lieux culturels dans les données OpenAgenda indexées (uniquement des événements, pas des informations tarifaires permanentes). Il doit le dire honnêtement plutôt que d'inventer un prix, et peut orienter l'utilisateur vers le site officiel du Louvre.",
+      "expects_refusal": true
     }
   ]
 }

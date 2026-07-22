@@ -10,7 +10,7 @@ conversation n'est conservé entre les questions (chaque appel à
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from langchain_core.documents import Document
@@ -39,6 +39,34 @@ def current_date_str() -> str:
     return f"{JOURS_FR[now.weekday()]} {now.day} {MOIS_FR[now.month - 1]} {now.year}"
 
 
+def this_weekend_str() -> str:
+    """Dates exactes (samedi et dimanche) du week-end en cours ou à venir,
+    calculées en Python plutôt que confiées au LLM.
+
+    Constaté en test réel : même avec la date du jour fournie dans le
+    prompt, le LLM peut se tromper sur le calcul du prochain week-end (ex.
+    un samedi 18 juillet annoncé comme "ce week-end (20-21 juillet)", qui
+    tombe en réalité un lundi et un mardi). Calculer ces dates nous-mêmes
+    élimine cette classe d'erreur d'arithmétique de dates.
+    """
+    now = datetime.now()
+    weekday = now.weekday()  # lundi=0 ... dimanche=6
+
+    if weekday == 5:  # samedi : le week-end, c'est aujourd'hui et demain
+        saturday = now
+    elif weekday == 6:  # dimanche : on est déjà dans le week-end
+        saturday = now - timedelta(days=1)
+    else:  # lundi à vendredi : le prochain samedi
+        saturday = now + timedelta(days=5 - weekday)
+
+    sunday = saturday + timedelta(days=1)
+
+    def fmt(d: datetime) -> str:
+        return f"{d.day} {MOIS_FR[d.month - 1]} {d.year}"
+
+    return f"samedi {fmt(saturday)} et dimanche {fmt(sunday)}"
+
+
 def build_system_prompt() -> str:
     return f"""Tu es l'assistant culturel de Puls-Events. Tu aides les utilisateurs \
 à trouver des événements culturels en Île-de-France (concerts, expositions, spectacles, \
@@ -47,6 +75,10 @@ festivals...).
 Nous sommes aujourd'hui le {current_date_str()}. Utilise cette date UNIQUEMENT si la \
 question contient une expression temporelle explicite (ex. "ce week-end", "demain", \
 "le mois prochain", "aujourd'hui") — ne l'utilise jamais autrement.
+
+Si la question mentionne "ce week-end" ou "ce weekend", sache que cela correspond \
+EXACTEMENT à {this_weekend_str()} — n'essaie PAS de recalculer ces dates toi-même, \
+utilise directement celles-ci.
 
 IMPORTANT : tous les événements fournis dans le contexte ci-dessous ont déjà été \
 vérifiés comme étant en cours ou à venir (jamais terminés). Si la question de \
@@ -65,8 +97,15 @@ période, si une période a été explicitement demandée), dis-le clairement et
 pertinent juste pour répondre quelque chose).
 - Mentionne systématiquement le titre, la ville et la date de chaque événement \
 que tu recommandes.
-- Réponds en français, de façon claire et conviviale, en 3 à 5 phrases maximum \
-sauf si la question demande explicitement une liste plus longue.
+- Si PLUSIEURS événements du contexte correspondent au thème demandé, \
+mentionne-les TOUS, pas seulement le premier ou les deux premiers — sauf si \
+l'utilisateur demande explicitement une seule suggestion ("juste une idée", \
+"un seul exemple"...). Ne résume pas artificiellement une liste d'événements \
+pertinents à un ou deux exemples par souci de concision : l'exhaustivité sur \
+les événements disponibles prime sur la brièveté.
+- Réponds en français, de façon claire et conviviale. Une phrase d'intro, \
+puis un item par événement pertinent (titre, ville, date, un bref descriptif), \
+sans limite de nombre de phrases artificielle.
 """
 
 
@@ -133,9 +172,31 @@ def format_context(documents: list[Document], reference_time: datetime | None = 
     return "\n\n".join(blocks)
 
 
-def retrieve_events(vectorstore: VectorStore, question: str, k: int = DEFAULT_TOP_K) -> list[Document]:
-    """Recherche sémantique dans l'index FAISS."""
-    return vectorstore.similarity_search(question, k=k)
+def retrieve_events(
+    vectorstore: VectorStore,
+    question: str,
+    k: int = DEFAULT_TOP_K,
+    max_distance: float | None = None,
+) -> list[Document]:
+    """Recherche sémantique dans l'index FAISS.
+
+    `max_distance` (optionnel) filtre les résultats dont la distance L2 est
+    strictement supérieure à ce seuil : au-delà d'une certaine distance, un
+    chunk n'est plus vraiment pertinent, même s'il fait partie des k plus
+    proches voisins. Sans ce filtre, un résultat "le moins mauvais parmi de
+    mauvais candidats" peut se glisser dans le contexte et y introduire du
+    bruit — ce qui dégrade context_precision (voir OpenClassrooms, "Mettez
+    en place un RAG pour un LLM", chapitre Évaluation).
+
+    max_distance=None (par défaut) préserve le comportement existant (pas de
+    filtrage), pour ne rien casser tant que la valeur n'a pas été calibrée
+    sur des données réelles.
+    """
+    if max_distance is None:
+        return vectorstore.similarity_search(question, k=k)
+
+    results = vectorstore.similarity_search_with_score(question, k=k)
+    return [doc for doc, score in results if score <= max_distance]
 
 
 def parse_event_datetime(value: str | None) -> datetime | None:
@@ -225,7 +286,15 @@ def answer_question(
     # venir) : une marge trop faible (ex. x4) laisse alors 0 résultat après
     # filtrage alors que des événements pertinents existent bien dans l'index.
     fetch_k = max(k * 15, 60)
-    candidates = retrieve_events(vectorstore, question, k=fetch_k)
+
+    # Seuil de distance optionnel (voir retrieve_events) : désactivé par
+    # défaut (None) tant qu'il n'a pas été calibré sur des données réelles
+    # avec scripts/calibrate_distance_threshold.py. Se configure via
+    # MAX_RETRIEVAL_DISTANCE dans .env une fois une valeur choisie.
+    max_distance_env = os.getenv("MAX_RETRIEVAL_DISTANCE")
+    max_distance = float(max_distance_env) if max_distance_env else None
+
+    candidates = retrieve_events(vectorstore, question, k=fetch_k, max_distance=max_distance)
     documents = filter_future_events(candidates)[:k]
 
     if not documents:
@@ -237,6 +306,7 @@ def answer_question(
             ),
             "sources": [],
             "num_events_found": 0,
+            "context_documents": [],
         }
 
     context = format_context(documents)
@@ -251,4 +321,10 @@ def answer_question(
         "answer": response.content,
         "sources": deduplicate_sources(documents),
         "num_events_found": len(deduplicate_sources(documents)),
+        # Texte brut des chunks EFFECTIVEMENT utilisés pour générer la
+        # réponse (après filtrage des événements passés). Indispensable pour
+        # évaluer correctement le système (Ragas, etc.) : sans ce champ, une
+        # évaluation externe risquerait de comparer la réponse à un contexte
+        # différent de celui qui l'a réellement produite.
+        "context_documents": [doc.page_content for doc in documents],
     }
